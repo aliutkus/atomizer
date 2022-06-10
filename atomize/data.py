@@ -9,6 +9,7 @@ import typing
 from typing import List
 import hydra
 
+
 @functional_datapipe('audioload')
 class AudioLoaderIterDataPipe(IterDataPipe):
     def __init__(self, filename_dp: IterDataPipe, duration=5) -> None:
@@ -34,6 +35,7 @@ class AudioLoaderIterDataPipe(IterDataPipe):
     def __len__(self):
         return len(self.source_dp)
 
+
 @functional_datapipe('truncate')
 class TruncaterIterDataPipe(IterDataPipe):
     def __init__(self, source_dp: IterDataPipe,
@@ -49,6 +51,7 @@ class TruncaterIterDataPipe(IterDataPipe):
                 key:x[key][self.start:self.stop] if (isinstance(x[key], torch.Tensor) and x[key].numel()>1)
                     else x[key]
                 for key in x}
+
 
 @functional_datapipe('atoms_shuffle')
 class AtomsShufflerIterDataPipe(IterDataPipe):
@@ -97,7 +100,6 @@ class AtomsRandomSkipperIterDataPipe(IterDataPipe):
             yield result
 
 
-
 @functional_datapipe('drop_keys')
 class KeysDropperIterDataPipe(IterDataPipe):
     """
@@ -114,6 +116,7 @@ class KeysDropperIterDataPipe(IterDataPipe):
                 {key:x[key] for key in x if key not in self.keys},
                 {key:x[key] for key in self.keys if key in x}
             )
+
 
 class AtomizerDatapipeWrapper(IterDataPipe):
     def __init__(self, source_dp, atomizer, forward_direction=True):
@@ -199,6 +202,7 @@ def collate(batch):
             for key in batch[0][entry]
         })
     return result
+
 
 def uncollate(batch):
     """invert the `collate_sequence_dicts` function

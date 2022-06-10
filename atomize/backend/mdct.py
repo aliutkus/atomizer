@@ -11,7 +11,8 @@ class AtomizerMDCT:
                  frame_length=2048,
                  dynamic_range_db=140,
                  sorted=True,
-                 num_velocities=1024
+                 num_velocities=1024,
+                 max_frames=500,
                 ):
         
         self.frame_length = frame_length
@@ -25,7 +26,7 @@ class AtomizerMDCT:
             'freqs': AtomFeature(cardinality=frame_length//2, is_location=True),
             'chans': AtomFeature(cardinality=2, is_location=False),
             'signs': AtomFeature(cardinality=2, is_location=False),
-            'times': AtomFeature(cardinality=None, is_location=True) # dynamic
+            'times': AtomFeature(cardinality=max_frames, is_location=True) # dynamic
         }
 
     def forward(self, batch):
@@ -68,7 +69,8 @@ class AtomizerMDCT:
             # compute negvelocities (smaller is louder)
             velocities = x.abs()
             max_mag = velocities.max()
-            velocities = velocities / max_mag
+            if max_mag:
+                velocities = velocities / max_mag
             eps = torch.tensor(10**(-self.dynamic_range_db / 20.))
             velocities = -20 * torch.log10(torch.maximum(velocities, eps))
             # extract the (possibly sorted velocities) and signs as lists
@@ -90,7 +92,6 @@ class AtomizerMDCT:
 
             # output the atoms
             (freqs, times, chans) = indices
-
             result.append({
                 # atom velocities
                 'velocities':velocities,
