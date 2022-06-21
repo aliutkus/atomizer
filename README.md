@@ -4,6 +4,7 @@
 
 ### I.A. Audio atomic representation
 
+
 **Atoms.** Let $\boldsymbol{X}$ be a raw multichannel $C\times T$ audio waveform, where $C$ is the number of channels and $T$ the number of timesteps. We assume we can express it as a sum of $N$ atoms:
 
 $$\boldsymbol{X} \approx \sum_{n=1}^N \phi \left( z_{n,1},\dots, z_{n,F} \right) ,$$
@@ -25,6 +26,8 @@ $z_{n,f}\in\[ 1,\dots,N_f\],$ where $N_f$ is the _cardinality_ of feature $f$. W
 
 
 ### I.B. Audio atomization
+
+![illustration atomization](doc/fig/atomization.png)
 
 **From audio to atoms**. As part of our data pipeline, we assume we have an analysis method $\mathcal{A}(\boldsymbol{X})$ that can convert raw audio into a sequence of  $N$ atom features 
 
@@ -57,6 +60,7 @@ The actual way this is done depends on the atomization procedure, and we do not 
 
 > In our implementation, reconstruction from a series of atom features is simply done through an inverse MDCT.
 
+
 ## II. Model
 
 Through atomization, our audio input has been converted into a sequence of atom features $\textbf{Z}\equiv\{\textbf{z}_n\}_n$, each of which composed of multidimensional discrete data. The core idea of the proposed method is to process audio in this representation through a sequence model from natural language processing.
@@ -88,7 +92,14 @@ $$\mathcal{E}\_f(\emptyset)\in\mathbb{R}^D.$$
 This corresponds to _masks_ in the typical parlance for Transformer models. A particularity of our approach is that we train a different mask for each feature.
 
 ### II.B. Atoms sequence modelling
+Now that we have a way to convert audio into a sequency of discrete tokens that are then converted as a sequence of $D$-dimensional vectors through embedding, we are ready to apply any language model to process it.
 
+As different kinds of applications, we propose the following:
+* **Atomic classification for source separation**. For some target source, we may want to classify all of its atoms as belonging or not to some given source. This is readily done through a Transformer model followed by a classification head. The target for training may be taken as the ideal ratio mask for that source in the MDCT domain.
+* **Bandwidth extension**. We may input the model with some low frequency atoms as inputs from a coder, and then have target atoms whose velocity is unknown, located at every time-frequency bin.
+* **Audio generation / inpainting**. As a more general thing to do, we may input the model with some context atoms for a coder, and then generate a sequence of further atoms through a generative language model.
+
+## References
 
 
 [^1]: Plumbley, Mark D., et al. "Sparse representations in audio and music: from coding to source separation." Proceedings of the IEEE 98.6 (2009): 995-1005.
