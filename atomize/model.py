@@ -2,7 +2,7 @@ import torch
 from torch import nn
 import torch.nn.functional as F
 import timm 
-from timm.models.layers import Mlp, DropPath
+from timm.models.layers import DropPath
 import pytorch_lightning as pl
 from torch import Tensor
 import typing
@@ -10,6 +10,7 @@ from einops import rearrange
 from omegaconf import OmegaConf
 import hydra
 import collections
+from .mlp import MLP
 
 
 class Attention(nn.Module):
@@ -132,14 +133,14 @@ class Block(nn.Module):
     Just hard-wiring LayerNorm"""
     def __init__(
             self, embed_dim, num_heads, mlp_ratio=4., qkv_bias=False, linear_attention=False, 
-            drop=0., init_values=None,
-            drop_path=0., act_layer=nn.GELU,
+            dropout=0., init_values=None,
+            drop_path=0., activation=nn.GELU,
             encoder=True):
         super().__init__()
 
         self.norm1 = nn.LayerNorm(embed_dim)
         self.attn = Attention(
-            embed_dim, num_heads=num_heads, qkv_bias=qkv_bias, proj_drop=drop, linear=linear_attention)
+            embed_dim, num_heads=num_heads, qkv_bias=qkv_bias, proj_drop=dropout, linear=linear_attention)
         self.ls1 = LayerScale(embed_dim, init_values=init_values) if init_values else nn.Identity()
         self.drop_path1 = DropPath(drop_path) if drop_path > 0. else nn.Identity()
 
@@ -149,13 +150,18 @@ class Block(nn.Module):
             self.norm_cross_target = nn.LayerNorm(embed_dim)
 
             self.attn_cross = Attention(
-                embed_dim, num_heads=num_heads, qkv_bias=qkv_bias, proj_drop=drop, linear=linear_attention)
+                embed_dim, num_heads=num_heads, qkv_bias=qkv_bias, proj_drop=dropout, linear=linear_attention)
             self.ls_cross = LayerScale(embed_dim, init_values=init_values) if init_values else nn.Identity()
             self.drop_path_cross = DropPath(drop_path) if drop_path > 0. else nn.Identity()
 
         self.norm2 = nn.LayerNorm(embed_dim)
-        mlp_hidden_dim = int(embed_dim * mlp_ratio)
-        self.mlp = Mlp(in_features=embed_dim, hidden_features=mlp_hidden_dim, act_layer=act_layer, drop=drop)
+        self.mlp = MLP(
+            in_dim=embed_dim,
+            out_dim=embed_dim,
+            hidden_dims=int(embed_dim * mlp_ratio),
+            activation=activation,
+            dropout=dropout
+        )
         self.ls2 = LayerScale(embed_dim, init_values=init_values) if init_values else nn.Identity()
         self.drop_path2 = DropPath(drop_path) if drop_path > 0. else nn.Identity()
 
@@ -208,9 +214,9 @@ class AtomsLocator(nn.Module):
         self,
         atomizer=None,
         depth=12,
-        num_heads=5,
-        embed_dim=360,
-        mlp_ratio=4,
+        num_heads=10,
+        embed_dim=640,
+        mlp_ratio=2,
         linear_attention=True,
     ):
         super().__init__()
@@ -221,31 +227,34 @@ class AtomsLocator(nn.Module):
         self.features = atomizer.features
 
         # Feature-wise encodings for input:
-        # when cardinality is given, feature-wise encoding is done through a standard embedding
+        # feature-wise encoding is done through a standard embedding
         self.featurewise_encoding = nn.ModuleDict({
             feature:nn.Embedding(self.features[feature].cardinality, embed_dim)
-            for feature in self.features if self.features[feature].cardinality
-        })
-        # When cardinality is None (dynamic features), feature-wise encoding is done with sinusoidal pos encoding
-        self.featurewise_encoding.update({
-            feature:SinusoidalEmbedder(1, embed_dim)
-            for feature in self.features if self.features[feature].cardinality is None
+            for feature in self.features
         })
 
+        """
         # joint-sinusoidal encoding for location features
         self.location_features = [name for name in self.features if self.features[name].is_location]
         if len(self.location_features):
             self.joint_location_encoding = SinusoidalEmbedder(len(self.location_features), embed_dim)
         else:
             self.joint_location_encoding = None
-
+        """
+    
         # masks encoding for the missing information
         self.masks = nn.ParameterDict({
-            feature:nn.Parameter(torch.randn(1, 1, embed_dim)*0.02) 
+            feature:nn.Parameter(torch.randn(1, 1, embed_dim))#*0.02) 
             for feature in self.features})
 
         # final MLP for the embedding
-        self.mlp_pe = Mlp(embed_dim, embed_dim * mlp_ratio, embed_dim)
+        self.mlp_pe = MLP(
+            in_dim=embed_dim,
+            out_dim=embed_dim,
+            hidden_dims=[embed_dim * mlp_ratio,] * 2,
+            activation=nn.GELU,
+            dropout=0
+        )
 
         # encoder blocs
         self.encoder_blocks = nn.ModuleList(
@@ -277,39 +286,18 @@ class AtomsLocator(nn.Module):
             ]
         )
 
-        """
-        # each predictors as a different block to predict the feature-wise
-        # estimated embeddings given the decoder output
-        self.predictors = nn.ModuleDict(
-            {
-                feature: Block(
-                    embed_dim=embed_dim,
-                    num_heads=num_heads,
-                    mlp_ratio=mlp_ratio,
-                    qkv_bias=True,
-                    linear_attention=False,#linear_attention,
-                    encoder=False
-                )
-                for feature in self.features
-            }
-        )
-        """
-
         # each predictors as a different mlp to convert the joint encoding to an estimated
         # feature-wise codes
         self.predictors = nn.ModuleDict({
-            feature:Mlp(
-                embed_dim,
-                embed_dim * mlp_ratio,
-                self.features[feature].cardinality
+            feature: MLP(
+                in_dim=embed_dim,
+                out_dim=self.features[feature].cardinality,
+                hidden_dims= [embed_dim * mlp_ratio] * 2,
+                dropout = 0,
+                activation=nn.GELU
             )
             for feature in self.features})
   
-        """
-        self.decoder_norm_q = nn.LayerNorm(embed_dim)
-        self.decoder_norm_k = nn.LayerNorm(embed_dim)
-        """
-
         self.initialize_weights()
 
     def initialize_weights(self):
@@ -375,16 +363,17 @@ class AtomsLocator(nn.Module):
                     if feature in self.masks:
                         embed = embed + self.masks[feature]
                         if current is target:
+                            # remember to predict this feature
                             target_features.append(feature)
 
-            # joint sinusoidal positional encoding for the locations
+            """# joint sinusoidal positional encoding for the locations
             locations = [current.get(feature) for feature in self.location_features]
             if  all([v is not None for v in locations]):
                 # all locations are given. add their joint embedding
                 embed = embed + self.joint_location_encoding(
                     torch.stack( locations , dim=-1)
                 )
-
+            """
             # finally some additional MLP
             embed = self.mlp_pe(embed)
             embeddings.append({'data':embed, 'masks':current.get('masks')})
@@ -403,100 +392,14 @@ class AtomsLocator(nn.Module):
             for blk in self.decoder_blocks:
                 target_embed['data'] = blk(target_embed, context_embed)
 
+        # apply the predictors
         (batchsize, target_len, embed_dim) = target_embed['data'].shape
         embeddings = target_embed['data'].view(-1, embed_dim)
         return {
             feature: self.predictors[feature](embeddings).view(batchsize, target_len, -1)
             for feature in target_features 
         }
-        return target_embed['data']
 
-    def decode(self, embeddings, targets):
-        """
-        decodes embeddings to provide scores for the different queries.
-
-        embeddings: A Tensor with shape (batchsize, length, embed_dim)
-                    that has been produced by the model to encode a 
-                    batch of (context, target) pairs.
-        targets: A dict of feature: values representing the features we want to
-                 predict.
-
-            feature: one of the entries of the atomizer.features
-            values: a Tensor with shape (num_classes) indicating the candidate values
-                    to check for that feature. 
-                    if None: if feature is a feature with known cardinality, will check
-                               all values in [0...feature.cardinality-1] by default.
-                               will error otherwise (we don't know which values to test
-                               for dynamic features like time).     
-        """
-        (batch_size, length, embed_dim) = embeddings.shape
-        #embeddings = {'data': embeddings, 'masks': None}
-        embeddings = embeddings.view(-1, embed_dim)
-
-        result = {}
-        for feature in targets:
-            if feature not in self.features:
-                continue
-            
-            if targets[feature] is None:
-                # user wants to test all the possibilities for this feature
-                if self.features[feature].cardinality is None:
-                    # the feature cannot be dynamic in that case, because we
-                    # have no way to guess what are the values to test
-                    raise ValueError(f'Query for {feature} cannot have a None value because {feature} is dynamic (it has None cardinality)')
-                targets[feature] = torch.arange(
-                    0, self.features[feature].cardinality,
-                    device=embeddings.device#['data'].device
-                )
-
-            # we have a list of target values for the current feature (e.g. time stamps, position, frequency, etc),
-            # which will serve as our candidates for prediction.
-            # We now compute their encodings.
-            # target_codes['data'] is (num_targets, embed_dim) Tensor
-            target_codes = self.featurewise_encoding[feature](targets[feature])
-
-            # apply the predictor to get the decoded embeddings for that 
-            # particular feature. (batchsize*len, embed_dim)
-            estimated_codes = self.predictors[feature](embeddings)
-            estimated_codes = estimated_codes.view(
-                batch_size, length, embed_dim) # (batchsize, len, embed_dim)
-
-            #import ipdb; ipdb.set_trace()
-
-            # normalize them
-            #target_codes = F.normalize(target_codes, dim=1)
-            #estimated_codes = F.normalize(estimated_codes, dim=2)
-
-            # compute the score and apply softmax
-            score = torch.einsum('bld,nd->bln', estimated_codes, target_codes)# * embed_dim ** (-0.5)
-            score = score.softmax(dim=-1)
-            #score = torch.relu(score)
-            #score = F.normalize(score, dim=-1)
-            #score = score / score.max(dim=-1, keepdim=True).values
-            ## result is softmax over the query dimension (to make it a probability)
-            result[feature] = score.view(batch_size, length, -1)
-
-            continue
-    
-            # we have a list of target values for the current feature (e.g. time stamps, position, frequency, etc),
-            # which will serve as our candidates for prediction.
-            # We now compute their encodings.
-            # target_codes['data'] is (num_targets, embed_dim) Tensor
-            target_codes = {
-                'data': self.featurewise_encoding[feature](targets[feature]),
-                'masks': None
-            }
-            # make them (batch_size, num_targets, embed_dim)
-            target_codes['data'] = target_codes['data'][None].repeat(batch_size, 1, 1)
-
-            estimated_embeddings = self.predictors[feature](embeddings, target_codes)
-
-            score = torch.einsum('bld,bnd->bln', estimated_embeddings, target_codes['data']) * (embed_dim ** -0.5)
-
-            ## result is softmax over the query dimension (to make it a probability)
-            result[feature] = score.softmax(dim=-1).view(batch_size, length, -1)
-            
-        return result
 
 class System(pl.LightningModule):
     def __init__(
@@ -508,7 +411,13 @@ class System(pl.LightningModule):
         ):
         super().__init__()        
         self.model = model
-        self.optimizer = optimizer_partial(params=model.parameters())
+        self.task_logweights = nn.ParameterDict({
+                feature: nn.Parameter(torch.as_tensor(
+                    torch.log(torch.as_tensor(self.model.features[feature].cardinality).double())
+                ))
+            for feature in self.model.features
+        })
+        self.optimizer = optimizer_partial(params=self.parameters())
         self.scheduler = {
             "scheduler": scheduler_partial(optimizer=self.optimizer),
             "monitor": "train/loss",  # Default: val_loss
@@ -521,39 +430,29 @@ class System(pl.LightningModule):
         context, target, ground_truth = batch
         estimate = self.model(context, target)
 
-        """embeddings = self.model(context, target)
-
-        # building the feature queries for decoding. If the feature has
-        # a known cardinality, let the model choose the queries.
-        # otherwise (for dynamic cardinality e.g. time), let the query lie
-        # inside the context range.
-        # doing this for all features that are not in target (the ones to predict)
-        queries = {
-            feature: (None if self.model.features[feature].cardinality is not None
-            else torch.arange(
-                ground_truth[feature].min(), ground_truth[feature].max()+1,
-                device = ground_truth[feature].device))
-            for feature in self.model.features if feature not in target
-        }
-        # get the output class likelihood
-        estimate = self.model.decode(embeddings, queries)
-        """
-
         loss = 0
-        for i, feature in enumerate(estimate):
+
+        for i, feature in enumerate(ground_truth):
+            # get the task weight
+            task_logweight = self.task_logweights[feature]
+
+            # compute cross entropy loss
             cardinality = estimate[feature].shape[-1]
             feature_loss = F.cross_entropy(
                 estimate[feature].contiguous().view(-1, cardinality), # estimate (batch*natoms, num_classes)
-                ground_truth[feature].flatten() # target
-            ) / torch.log(torch.tensor(cardinality))
-            
+                ground_truth[feature].flatten()
+            ) * torch.exp(-task_logweight) + task_logweight * 0.5
+
+            self.log(f"train/weights/{feature}", torch.exp(-task_logweight))
             self.log(f"train/loss/{feature}", feature_loss)
             loss = loss + feature_loss
 
+            # compute train accuracy
             pred = estimate[feature].argmax(dim=-1)
             feature_acc = (pred==ground_truth[feature]).sum()/ground_truth[feature].numel()*100
             self.log(f"train/acc/{feature}", feature_acc)
 
+        # compute the actual prediction
         pred = {**target, **{feature:estimate[feature].argmax(dim=-1) for feature in estimate}}
         self.log("train/total_loss", loss)
         return {"loss": loss, "pred": pred}

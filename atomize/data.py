@@ -28,7 +28,8 @@ class AudioLoaderIterDataPipe(IterDataPipe):
                     start_pos = torch.rand(1) * (f.frames-duration -1)
                     f.seek(int(start_pos))
                     audio = f.read(int(duration))
-                yield audio[None, 0], sample_rate
+
+                yield audio, sample_rate
             except (ValueError, RuntimeError) as e:
                 # not an audio file
                 continue
@@ -146,7 +147,8 @@ class AtomsDatapipe(IterDataPipe):
             shuffle=True,
             num_atoms_context=10000,
             num_atoms_target=1000,
-            target_keys=['times','freqs', 'signs', 'chans']
+            drop_from_target=['times','freqs', 'signs', 'chans'],
+            drop_from_groundtruth=None
         ):
         # list files
         datapipe = dp.iter.FileLister(
@@ -175,7 +177,10 @@ class AtomsDatapipe(IterDataPipe):
             num_atoms_context,
             num_atoms_context + num_atoms_target)
         target_dp, groundtruth_dp = target_dp.drop_keys(
-            list(target_keys)).unzip(sequence_length=2)
+            drop_from_target).unzip(sequence_length=2)
+        if drop_from_groundtruth is not None:
+            groundtruth_dp, _ = groundtruth_dp.drop_keys(
+                drop_from_groundtruth).unzip(sequence_length=2)
 
         self.datapipe = context_dp.zip(target_dp, groundtruth_dp)
 

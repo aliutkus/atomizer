@@ -1,0 +1,94 @@
+hydra:
+  job:
+    name: atomizer
+    chdir: false
+
+data:
+  atomizer:
+    _target_: atomize.mdct.AtomizerMDCT
+    frame_length: 2048
+    dynamic_range_db: 140
+    sorted: true
+    num_velocities: 1024
+    max_frames: 500
+
+  pipe:
+    _target_: atomize.data.AtomsDatapipe
+    audio_folder: "/data/FMA/fma_full"
+    excerpts_length: 1
+    atomizer: ${data.atomizer}
+    random_skip: null
+    sample_size: 5000
+    shuffle: true
+    num_atoms_context: 1024
+    num_atoms_target: 1024
+    target_keys:
+    - times
+    - freqs
+    - signs
+    - chans
+
+  loader:
+    _target_: torch.utils.data.DataLoader
+    dataset: ${data.pipe}
+    batch_size: 16
+    num_workers: 66
+    
+system:
+  _target_: atomize.System  
+
+  model:
+    _target_: atomize.AtomsLocator
+    atomizer: ${data.atomizer}
+    depth: 12
+    num_heads: 5
+    embed_dim: 360
+    mlp_ratio: 4
+    linear_attention: false
+
+  optimizer_partial:
+    _target_: torch.optim.SGD
+    _partial_: true
+    lr: 1e-3
+
+  scheduler_partial:
+    _target_: torch.optim.lr_scheduler.CosineAnnealingWarmRestarts
+    _partial_: true
+    T_0: 10
+    T_mult: 2
+    eta_min: 0.
+    last_epoch: -1
+
+  lr_frequency: 50
+
+trainer:
+  _target_: pytorch_lightning.Trainer
+  amp_backend: native
+  precision: 32
+  accelerator: gpu
+  devices: 1
+  detect_anomaly: true
+  logger: ${misc.logger}
+  accumulate_grad_batches: 1
+  callbacks:
+    - ${misc.lr_monitor}
+    - ${misc.model_checkpoint}
+  max_steps: 30000
+  default_root_dir: checkpoints
+
+misc:
+  lr_monitor:
+    _target_: pytorch_lightning.callbacks.LearningRateMonitor
+    logging_interval: step
+  model_checkpoint:
+    _target_: pytorch_lightning.callbacks.ModelCheckpoint
+    save_last: true
+    every_n_train_steps: 1000
+  logger:
+    _target_: pytorch_lightning.loggers.WandbLogger
+    _recursive_: false
+    _convert_: all
+    project: atomizer      
+    config:
+      data: ${data}
+      system: ${system}
