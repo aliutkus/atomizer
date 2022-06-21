@@ -6,7 +6,7 @@
 
 **Atoms.** Let $\textbf{X}$ be a raw multichannel $C\times T$ audio waveform, where $C$ is the number of channels and $T$ the number of timesteps. We assume we can express $\textbf{X}$ as a sum of $N$ _atoms_:
 
-$\textbf{X}\approx\sum_{n=1}^N\phi\left(z_{n,1},\dots,z_{n,F}\right),$
+$$\textbf{X}\approx\sum_{n=1}^N\phi\left(z_{n,1},\dots,z_{n,F}\right),$$
 
 where $\phi$ is a synthesis function and $\textbf{z}_n\equiv\left[z_{n,1},\dots,z_{n,F}\right]$ is a $F$-dimensional vector whose $F$ entries are the _features_ of atom $n$ (for instance: velocity, frequency, time position, etc.). Such a decomposition is classical in the domain of _sparse representations_ and any signal can be approximated arbitrarily well in such a way, provided a sufficient number $N$ of atoms is chosen[^1].
 
